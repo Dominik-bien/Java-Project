@@ -4,7 +4,7 @@ import com.example.clinicapp.model.Patient;
 import com.example.clinicapp.network.ClinicClient;
 import com.example.clinicapp.network.MessageType;
 import com.example.clinicapp.network.NetworkMessage;
-import com.example.clinicapp.service.PatientService;
+import com.example.clinicapp.client.service.PatientService;
 import com.example.clinicapp.util.AlertMessage;
 import javafx.application.Platform;
 import javafx.event.ActionEvent;
@@ -43,10 +43,8 @@ public class PatientPageController implements Initializable {
     @FXML private TextField register_username;
 
     private AlertMessage alert = new AlertMessage();
-    private PatientService patientService = new PatientService();
+    private PatientService patientService;
     private ClinicClient clinicClient;
-
-
 
     public void setClinicClient(ClinicClient clinicClient) {
         this.clinicClient = clinicClient;
@@ -66,44 +64,27 @@ public class PatientPageController implements Initializable {
             return;
         }
 
-        ExecutorService executor = Executors.newSingleThreadExecutor();
+        if (clinicClient == null || !clinicClient.isConnected()) {
+            alert.errorMessage("Brak połączenia z serwerem.");
+            return;
+        }
 
-        Callable<Optional<Patient>> loginTask = () -> patientService.login(username, password);
-
-        Future<Optional<Patient>> future = executor.submit(loginTask);
-
-        // Uruchamiamy wątek obsługujący asynchroniczne logowanie
-        new Thread(() -> {
+        // Use Platform.runLater to avoid blocking the UI thread
+        Platform.runLater(() -> {
             try {
-                Optional<Patient> patientOpt = future.get(); // blokuje, ale to w osobnym wątku
+                Optional<Patient> patientOpt = patientService.login(username, password);
 
-                Platform.runLater(() -> {
-                    if (patientOpt.isPresent()) {
-                        alert.successMessage("Logowanie wykonano pomyślnie!");
-
-                        if (clinicClient != null && clinicClient.isConnected()) {
-                            try {
-                                clinicClient.sendMessage(new NetworkMessage(MessageType.LOGIN,
-                                        username + ":" + password + ":"));
-                            } catch (IOException e) {
-                                alert.errorMessage("Nie udało się wysłać wiadomości do serwera: " + e.getMessage());
-                            }
-                        } else {
-                            alert.errorMessage("Brak połączenia z serwerem.");
-                        }
-
-                        openClinicSystem(patientOpt.get()); // otwarcie GUI po logowaniu
-                    } else {
-                        alert.errorMessage("Nieprawidłowa nazwa użytkownika lub hasło");
-                    }
-                });
-            } catch (InterruptedException | ExecutionException e) {
+                if (patientOpt.isPresent()) {
+                    alert.successMessage("Logowanie wykonano pomyślnie!");
+                    openClinicSystem(patientOpt.get()); // otwarcie GUI po logowaniu
+                } else {
+                    alert.errorMessage("Nieprawidłowa nazwa użytkownika lub hasło");
+                }
+            } catch (Exception e) {
                 e.printStackTrace();
-                Platform.runLater(() -> alert.errorMessage("Błąd podczas logowania: " + e.getMessage()));
-            } finally {
-                executor.shutdown();
+                alert.errorMessage("Błąd podczas logowania: " + e.getMessage());
             }
-        }).start();
+        });
     }
 
     public void registerAccount() {
@@ -172,12 +153,14 @@ public class PatientPageController implements Initializable {
             // Pobierz kontroler i ustaw zalogowanego pacjenta
             PatientDashboardController controller = loader.getController();
 
-
+            // Set the client first (initializes services and loads doctors list)
             controller.setClient(clinicClient);
 
+            // Then set the current user (loads recipes)
             controller.setCurrentUser(loggedPatient);
-            controller.setOutputStream(clinicClient.getOut()); // jeśli masz dostęp do tego strumienia
-            controller.setClient(clinicClient);
+
+            // This is deprecated and redundant since we're using setClient
+            // controller.setOutputStream(clinicClient.getOut());
 
             Stage stage = (Stage) login_button.getScene().getWindow();
             stage.setScene(new Scene(root));
@@ -244,10 +227,18 @@ public class PatientPageController implements Initializable {
     public void initialize(URL url, ResourceBundle rb) {
         try {
             clinicClient = new ClinicClient("localhost", 12345, this::onServerMessage);
-            clinicClient.startListening();
+            // No need to call startListening() as it will be called automatically by sendMessageAndWaitForResponse()
+
+            // Initialize the client-side service with the clinic client
+            patientService = new PatientService(clinicClient);
         } catch (IOException e) {
-            alert.errorMessage("Błąd połączenia z serwerem: " + e.getMessage());
+            alert.errorMessage("Błąd połączenia z serwerem: " + e.getMessage() + 
+                              "\nAplikacja wymaga połączenia z serwerem do działania.");
             clinicClient = null;
+
+            // Disable login and register buttons
+            login_button.setDisable(true);
+            register_button.setDisable(true);
         }
     }
 }

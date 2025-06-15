@@ -4,7 +4,7 @@ import com.example.clinicapp.model.Doctor;
 import com.example.clinicapp.network.ClinicClient;
 import com.example.clinicapp.network.MessageType;
 import com.example.clinicapp.network.NetworkMessage;
-import com.example.clinicapp.service.DoctorService;
+import com.example.clinicapp.client.service.DoctorService;
 import com.example.clinicapp.util.AlertMessage;
 import javafx.application.Platform;
 import javafx.event.ActionEvent;
@@ -41,7 +41,7 @@ public class DoctorPageController implements Initializable {
     @FXML private TextField register_fullName;
 
     private AlertMessage alert = new AlertMessage();
-    private DoctorService doctorService = new DoctorService();
+    private DoctorService doctorService;
     private ClinicClient clinicClient;
 
     public void loginAccount() {
@@ -63,28 +63,25 @@ public class DoctorPageController implements Initializable {
             return;
         }
 
+        if (clinicClient == null || !clinicClient.isConnected()) {
+            alert.errorMessage("Brak połączenia z serwerem.");
+            return;
+        }
+
         try {
             Doctor doctor = doctorService.login(email, password);
             if (doctor != null) {
                 alert.successMessage("Logowanie wykonano pomyślnie!");
-
-
-                if (clinicClient != null && clinicClient.isConnected()) {
-                    try {
-                        clinicClient.sendMessage(new NetworkMessage(MessageType.LOGIN,
-                                doctor.getEmail() + ":" + doctor.getPassword() + ":"));
-                    } catch (IOException e) {
-                        alert.errorMessage("Nie udało się wysłać wiadomości do serwera: " + e.getMessage());
-                    }
-                } else {
-                    alert.errorMessage("Brak połączenia z serwerem.");
-                }
-
                 openDoctorDashboard(doctor, clinicClient);
-
             } else {
                 alert.errorMessage("Nieprawidłowa nazwa użytkownika lub hasło");
             }
+        } catch (IOException e) {
+            e.printStackTrace();
+            alert.errorMessage("Nie udało się wysłać wiadomości do serwera: " + e.getMessage());
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+            alert.errorMessage("Operacja została przerwana: " + e.getMessage());
         } catch (Exception e) {
             e.printStackTrace();
             alert.errorMessage("Błąd podczas logowania: " + e.getMessage());
@@ -187,7 +184,6 @@ public class DoctorPageController implements Initializable {
         }
     }
 
-
     public void registerClear() {
         register_email.clear();
         register_fullName.clear();
@@ -213,7 +209,6 @@ public class DoctorPageController implements Initializable {
         stage.setScene(new Scene(root));
     }
 
-
     private void onServerMessage(NetworkMessage msg) {
         Platform.runLater(() -> {
             System.out.println("Otrzymano wiadomość: " + msg.getType() + " - " + msg.getPayload());
@@ -233,10 +228,18 @@ public class DoctorPageController implements Initializable {
     public void initialize(URL url, ResourceBundle rb) {
         try {
             clinicClient = new ClinicClient("localhost", 12345, this::onServerMessage);
-            clinicClient.startListening();
+            // No need to call startListening() as it will be called automatically by sendMessageAndWaitForResponse()
+
+            // Initialize the client-side service with the clinic client
+            doctorService = new DoctorService(clinicClient);
         } catch (IOException e) {
-            alert.errorMessage("Błąd połączenia z serwerem: " + e.getMessage());
-            clinicClient = null; // lub inna obsługa
+            alert.errorMessage("Błąd połączenia z serwerem: " + e.getMessage() + 
+                              "\nAplikacja wymaga połączenia z serwerem do działania.");
+            clinicClient = null;
+
+            // Disable login and register buttons
+            login_button.setDisable(true);
+            register_button.setDisable(true);
         }
     }
 }
